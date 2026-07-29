@@ -1,9 +1,18 @@
+import logging
+import sys
+
 from dotenv import load_dotenv
 from mcp.server import MCPServer
 
 from pokemon_tcg_mcp_server.mongodb_client import create_mongodb_client
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
 
 mcp = MCPServer("Demo")
 
@@ -12,13 +21,6 @@ mcp = MCPServer("Demo")
 def add(a: int, b: int) -> int:
     """Add two numbers."""
     return a + b
-
-
-@mcp.resource("greeting://{name}")
-def greeting(name: str) -> str:
-    """Greet someone by name."""
-    return f"Hello, {name}"
-
 
 @mcp.tool()
 def get_card(card_id: str) -> str:

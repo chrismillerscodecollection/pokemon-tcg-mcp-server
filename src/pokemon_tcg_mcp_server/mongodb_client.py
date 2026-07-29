@@ -2,7 +2,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from pymongo import MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import ConnectionFailure
 from pymongo.server_api import ServerApi
 
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def create_mongodb_client() -> MongoClient:
+async def create_mongodb_client() -> AsyncIOMotorClient:
 
     db_password = os.getenv("DB_PASSWORD")
     if not db_password:
@@ -21,10 +21,10 @@ def create_mongodb_client() -> MongoClient:
 
     uri = f"mongodb+srv://cm_dev:{db_password}@pokemon-tcg-cluster.ufxy8d9.mongodb.net/?appName=pokemon-tcg-cluster"
 
-    client: MongoClient = MongoClient(uri, server_api=ServerApi("1"))
+    client: AsyncIOMotorClient = AsyncIOMotorClient(uri, server_api=ServerApi("1"))
 
     try:
-        client.admin.command("ping")
+        await client.admin.command("ping")
         logger.info("Pinged your deployment. You successfully connected to MongoDB!")
         return client
     except ConnectionFailure as e:
