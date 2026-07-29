@@ -13,3 +13,4 @@ wheels/
 .env
 .claude
 .ruff_cache
+.vscode
