@@ -1,25 +1,16 @@
-import os
-
-from dotenv import load_dotenv
+import pytest
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
-from pymongo.server_api import ServerApi
 
-load_dotenv()
-
-db_password = os.getenv("DB_PASSWORD")
-uri = f"mongodb+srv://cm_dev:{db_password}@pokemon-tcg-cluster.ufxy8d9.mongodb.net/?appName=pokemon-tcg-cluster"
-client: MongoClient = MongoClient(uri, server_api=ServerApi("1"))
+from pokemon_tcg_mcp_server.mongodb_client import create_mongodb_client
 
 
-def connect_to_mongodb():
-    try:
-        client.admin.command("ping")
-        print("Pinged your deployment. You successfully connected to MongoDB!")
-        return(True)
-    except ConnectionFailure as e:
-        print(f"Failed to connect to MongoDB: {e}")
-        return(False)
-    
-def test_connect_to_mongodb():
-    assert connect_to_mongodb() == True
+@pytest.fixture
+def mongodb_client():
+    client = create_mongodb_client()
+    yield client
+    client.close()
+
+
+@pytest.mark.integration
+def test_connect_to_mongodb(mongodb_client):
+    assert isinstance(mongodb_client, MongoClient)
