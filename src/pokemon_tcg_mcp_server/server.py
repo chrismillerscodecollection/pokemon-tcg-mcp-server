@@ -2,18 +2,11 @@ import os
 
 from dotenv import load_dotenv
 from mcp.server import MCPServer
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
-from pymongo.server_api import ServerApi
+from pokemon_tcg_mcp_server.mongodb_client import create_mongodb_client
 
 load_dotenv()
 
-db_password = os.getenv("DB_PASSWORD")
-uri = f"mongodb+srv://cm_dev:{db_password}@pokemon-tcg-cluster.ufxy8d9.mongodb.net/?appName=pokemon-tcg-cluster"
-client: MongoClient = MongoClient(uri, server_api=ServerApi("1"))
-
 mcp = MCPServer("Demo")
-
 
 @mcp.tool()
 def add(a: int, b: int) -> int:
@@ -34,12 +27,8 @@ def get_card(card_id: str) -> str:
 
 
 def main():
-    try:
-        client.admin.command("ping")
-        print("Pinged your deployment. You successfully connected to MongoDB!")
-    except ConnectionFailure as e:
-        print(f"Failed to connect to MongoDB: {e}")
-
+    client = create_mongodb_client()
+    print(client)
 
 if __name__ == "__main__":
     main()
