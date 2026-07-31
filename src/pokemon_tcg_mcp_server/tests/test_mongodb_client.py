@@ -11,6 +11,7 @@ async def mongodb_client():
     yield client
     client.close()
 
+
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_connect_to_mongodb(mongodb_client):

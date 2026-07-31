@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dotenv>=0.9.9",
-    "mcp[cli]==2.0.0b1",
+    "fastmcp>=3.4.5",
     "motor>=3.7.1",
     "pymongo>=4.17.0",
     "pytest>=9.1.1",
