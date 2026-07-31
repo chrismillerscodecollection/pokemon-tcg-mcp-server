@@ -12,16 +12,14 @@ load_dotenv()
 
 async def create_mongodb_client() -> AsyncIOMotorClient:
 
-    db_password = os.getenv("DB_PASSWORD")
-    if not db_password:
-        logger.error("DB_PASSWORD environment variable is not set")
-        raise ValueError("DB_PASSWORD environment variable is not set")
+    db_uri = os.getenv("DB_URI")
+    if not db_uri:
+        logger.error("DB_URI environment variable is not set")
+        raise ValueError("DB_URI environment variable is not set")
     else:
-        logger.info("DB_PASSWORD environment variable is set")
+        logger.info("DB_URI environment variable is set")
 
-    uri = f"mongodb+srv://cm_dev:{db_password}@pokemon-tcg-cluster.ufxy8d9.mongodb.net/?appName=pokemon-tcg-cluster"
-
-    client: AsyncIOMotorClient = AsyncIOMotorClient(uri, server_api=ServerApi("1"))
+    client: AsyncIOMotorClient = AsyncIOMotorClient(db_uri, server_api=ServerApi("1"))
 
     try:
         await client.admin.command("ping")
