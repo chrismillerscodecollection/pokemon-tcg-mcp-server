@@ -23,6 +23,11 @@ requires = ["uv_build>=0.11.28,<0.12"]
 build-backend = "uv_build"
 
 [tool.pytest.ini_options]
+testpaths = ["src/pokemon_tcg_mcp_server/tests"]
+# Integration tests need a live MongoDB, so they are opt-in: run them with
+# `pytest -m integration`.
+addopts = "-m 'not integration' --strict-markers"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: tests that require external services (e.g. a live MongoDB connection)",
 ]
