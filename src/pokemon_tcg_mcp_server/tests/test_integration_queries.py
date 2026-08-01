@@ -39,6 +39,7 @@ SEED_CARDS = [
         "types": ["Fire"],
         "attacks": [{"name": "Fire Spin", "cost": ["Fire"] * 4, "damage": "100"}],
         "weaknesses": [{"type": "Water", "value": "×2"}],
+        "resistances": [{"type": "Fighting", "value": "-30"}],
         "rarity": "Rare Holo",
     },
     {
@@ -89,6 +90,30 @@ SEED_ODD_HP = [
     {"_id": "x-2", "name": "Blank", "hp": "", "supertype": "Pokémon"},
 ]
 
+# The attack_cost filter binds every requested symbol to one attack. Proving
+# that needs a card whose symbols are split across two attacks, which would
+# perturb the counts above, so it gets its own collection too.
+SEED_ATTACK_COSTS = [
+    {
+        # Fire on one attack, Colorless on another. The filter must not match
+        # it for ['Fire', 'Colorless'] — the old $in rule did.
+        "_id": "baseset-12",
+        "name": "Ninetales",
+        "supertype": "Pokémon",
+        "attacks": [
+            {"name": "Lure", "cost": ["Colorless", "Colorless"]},
+            {"name": "Fire Blast", "cost": ["Fire"] * 4},
+        ],
+    },
+    {
+        # Both symbols on one attack, which is what the filter means.
+        "_id": "baseset-23",
+        "name": "Arcanine",
+        "supertype": "Pokémon",
+        "attacks": [{"name": "Flamethrower", "cost": ["Fire", "Fire", "Colorless"]}],
+    },
+]
+
 SEED_BLOCK_FORMATS = [
     {
         "_id": "base-fossil",
@@ -118,6 +143,7 @@ async def live_db():
         db = client[TEST_DB_NAME]
         await db["cards"].insert_many(SEED_CARDS)
         await db["cards_odd_hp"].insert_many(SEED_ODD_HP)
+        await db["cards_attack_cost"].insert_many(SEED_ATTACK_COSTS)
         await db["block_formats"].insert_many(SEED_BLOCK_FORMATS)
         yield db
     finally:
@@ -243,6 +269,29 @@ class TestAttributeQueries:
             "fossil-3"
         }
 
+    async def test_supertype_is_exact(self, live_db):
+        assert await matching_ids(live_db, CardFilters(supertype="Trainer")) == {
+            "baseset-91"
+        }
+
+    async def test_supertype_matches_the_accented_string(self, live_db):
+        # Every document spells it with a precomposed U+00E9.
+        assert "baseset-91" not in await matching_ids(
+            live_db, CardFilters(supertype="Pokémon")
+        )
+
+    async def test_name_is_a_case_insensitive_substring(self, live_db):
+        assert await matching_ids(live_db, CardFilters(name="char")) == {"baseset-4"}
+        assert await matching_ids(live_db, CardFilters(name="CHARIZ")) == {"baseset-4"}
+
+    async def test_name_matches_a_substring_anywhere(self, live_db):
+        assert await matching_ids(live_db, CardFilters(name="uno")) == {"fossil-3"}
+
+    async def test_resistance_matches_inside_the_subdocument_array(self, live_db):
+        assert await matching_ids(live_db, CardFilters(resistance="Fighting")) == {
+            "baseset-4"
+        }
+
     async def test_rarity(self, live_db):
         assert await matching_ids(live_db, CardFilters(rarity="Rare Holo")) == {
             "baseset-4",
@@ -280,3 +329,90 @@ class TestCombinedQueries:
             live_db,
             CardFilters(hp=HPFilter(lte=100), block_format="base-fossil"),
         ) == {"baseset-58", "fossil-3"}
+
+
+class TestAttackCostSemantics:
+    """Every requested symbol has to sit on ONE attack, not be spread around."""
+
+    async def test_symbols_split_across_two_attacks_do_not_match(self, live_db):
+        # Ninetales pays Colorless on Lure and Fire on Fire Blast. Reading that
+        # as a match for ['Fire', 'Colorless'] is the bug $elemMatch fixes.
+        assert await matching_ids(
+            live_db,
+            CardFilters(attack_cost=["Fire", "Colorless"]),
+            collection="cards_attack_cost",
+        ) == {"baseset-23"}
+
+    async def test_a_single_symbol_still_matches_either_card(self, live_db):
+        assert await matching_ids(
+            live_db,
+            CardFilters(attack_cost=["Fire"]),
+            collection="cards_attack_cost",
+        ) == {"baseset-12", "baseset-23"}
+
+    async def test_matching_is_set_containment_not_multiset(self, live_db):
+        # $all does not count duplicates, so asking for two Fire is the same
+        # as asking for one. Documented rather than fixed.
+        one = await matching_ids(
+            live_db, CardFilters(attack_cost=["Fire"]), collection="cards_attack_cost"
+        )
+        two = await matching_ids(
+            live_db,
+            CardFilters(attack_cost=["Fire", "Fire"]),
+            collection="cards_attack_cost",
+        )
+
+        assert one == two
+
+    async def test_the_cost_may_carry_extra_symbols(self, live_db):
+        # Containment, not equality: Flamethrower costs Fire Fire Colorless.
+        assert await matching_ids(
+            live_db,
+            CardFilters(attack_cost=["Colorless"]),
+            collection="cards_attack_cost",
+        ) == {"baseset-12", "baseset-23"}
+
+
+class TestPaging:
+    """Paging is only coherent because the query sorts first."""
+
+    async def test_pages_partition_the_result_set(self, live_db):
+        query = await build_query(live_db, CardFilters())
+        total = await live_db["cards"].count_documents(query)
+
+        async def page(offset, limit=2):
+            docs = (
+                await live_db["cards"]
+                .find(query)
+                .sort("_id", 1)
+                .skip(offset)
+                .limit(limit)
+                .to_list(None)
+            )
+            return [doc["_id"] for doc in docs]
+
+        pages = [await page(offset) for offset in range(0, total, 2)]
+        seen = [card_id for page_ids in pages for card_id in page_ids]
+
+        assert len(seen) == total
+        assert len(set(seen)) == total  # no card appears on two pages
+        assert seen == sorted(seen)
+
+    async def test_an_offset_past_the_end_is_empty(self, live_db):
+        query = await build_query(live_db, CardFilters())
+        docs = (
+            await live_db["cards"]
+            .find(query)
+            .sort("_id", 1)
+            .skip(len(SEED_CARDS))
+            .limit(25)
+            .to_list(None)
+        )
+
+        assert docs == []
+
+    async def test_count_ignores_paging(self, live_db):
+        # total_count has to describe the whole result, not the page.
+        query = await build_query(live_db, CardFilters(supertype="Pokémon"))
+
+        assert await live_db["cards"].count_documents(query) == len(SEED_CARDS) - 1

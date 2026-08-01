@@ -6,6 +6,9 @@ keeps hp-less cards out of bounded results, and the set-prefix regex that
 stands in for a set field the cards do not have.
 """
 
+import re
+import unicodedata
+
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -74,7 +77,7 @@ class TestBuildBlockFormatStage:
         # Cards carry no set field; the set is the '<set>-<number>' id prefix.
         stage = await build_block_format_stage(db, "base-fossil")
 
-        assert stage == {"_id": {"$regex": "^(base1|basep|base2|base3)-"}}
+        assert stage == {"_id": {"$regex": "^(baseset|jungle|fossil)-"}}
 
     async def test_looked_up_by_id_first(self, db, block_formats):
         await build_block_format_stage(db, "base-fossil")
@@ -88,7 +91,7 @@ class TestBuildBlockFormatStage:
             {"_id": "Base - Fossil"},
             {"name": "Base - Fossil"},
         ]
-        assert stage == {"_id": {"$regex": "^(base1|basep|base2|base3)-"}}
+        assert stage == {"_id": {"$regex": "^(baseset|jungle|fossil)-"}}
 
     async def test_unknown_format_raises_tool_error(self, db):
         with pytest.raises(ToolError, match="Unknown block format 'nope'"):
@@ -132,13 +135,52 @@ class TestBuildQuery:
 
         assert query == {"weaknesses.type": "Water"}
 
-    async def test_attack_cost(self, db):
-        query = await build_query(db, CardFilters(attack_cost=["Fire"]))
+    async def test_attack_cost_binds_every_symbol_to_one_attack(self, db):
+        # $elemMatch is what stops the symbols being spread across two attacks.
+        query = await build_query(db, CardFilters(attack_cost=["Fire", "Colorless"]))
 
-        assert query == {"attacks.cost": {"$in": ["Fire"]}}
+        assert query == {
+            "attacks": {"$elemMatch": {"cost": {"$all": ["Fire", "Colorless"]}}}
+        }
 
     async def test_empty_attack_cost_does_not_filter(self, db):
+        # {'$all': []} matches nothing, so the guard is what keeps an empty
+        # list a no-op rather than a query that returns zero cards.
         assert await build_query(db, CardFilters(attack_cost=[])) == {}
+
+    async def test_supertype_is_an_exact_match(self, db):
+        query = await build_query(db, CardFilters(supertype="Trainer"))
+
+        assert query == {"supertype": "Trainer"}
+
+    async def test_supertype_is_normalised_to_the_stored_form(self, db):
+        # 'Pokémon' decomposed: 'e' + U+0301 renders identically but is a
+        # different string, and every document stores the composed form.
+        decomposed = unicodedata.normalize("NFD", "Pokémon")
+        assert decomposed != "Pokémon"
+
+        query = await build_query(db, CardFilters(supertype=decomposed))
+
+        assert query == {"supertype": "Pokémon"}
+
+    async def test_name_is_a_case_insensitive_substring(self, db):
+        query = await build_query(db, CardFilters(name="char"))
+
+        assert query == {"name": {"$regex": "char", "$options": "i"}}
+
+    async def test_name_escapes_regex_metacharacters(self, db):
+        # Unescaped, the '.' in 'Mr. Mime' would match any character.
+        query = await build_query(db, CardFilters(name="Mr. Mime"))
+
+        assert query["name"]["$regex"] == re.escape("Mr. Mime")
+
+    async def test_empty_name_does_not_filter(self, db):
+        assert await build_query(db, CardFilters(name="")) == {}
+
+    async def test_resistance_reaches_into_the_subdocument(self, db):
+        query = await build_query(db, CardFilters(resistance="Fighting"))
+
+        assert query == {"resistances.type": "Fighting"}
 
     async def test_rarity(self, db):
         query = await build_query(db, CardFilters(rarity="Rare Holo"))
@@ -156,7 +198,10 @@ class TestBuildQuery:
             CardFilters(
                 hp=HPFilter(gte=70),
                 types=["Fire"],
+                supertype="Pokémon",
+                name="char",
                 weakness="Water",
+                resistance="Fighting",
                 attack_cost=["Fire"],
                 rarity="Rare Holo",
                 block_format="base-fossil",
@@ -167,8 +212,11 @@ class TestBuildQuery:
             "$expr": {"$and": [{"$gte": [HP_AS_INT, 70]}]},
             "hp": {"$exists": True},
             "types": {"$in": ["Fire"]},
+            "supertype": "Pokémon",
+            "name": {"$regex": "char", "$options": "i"},
             "weaknesses.type": "Water",
-            "attacks.cost": {"$in": ["Fire"]},
+            "resistances.type": "Fighting",
+            "attacks": {"$elemMatch": {"cost": {"$all": ["Fire"]}}},
             "rarity": "Rare Holo",
-            "_id": {"$regex": "^(base1|basep|base2|base3)-"},
+            "_id": {"$regex": "^(baseset|jungle|fossil)-"},
         }
