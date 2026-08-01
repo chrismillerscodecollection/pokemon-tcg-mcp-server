@@ -56,15 +56,21 @@ class Card(_Model):
     supertype: str = ""
     subtypes: list[str] = Field(default_factory=list)
     number: str = ""
+    # 'hp' must stay immediately above 'hp_numeric': derive_hp_numeric reads it
+    # out of info.data, which only holds the fields validated so far.
     hp: str | None = None
     hp_numeric: int = Field(default=0, validate_default=True)
     types: Types = Field(default_factory=list)
     attacks: Attacks = Field(default_factory=list)
     abilities: Abilities = Field(default_factory=list)
+    # Where a Trainer's entire effect lives, and where a Special Energy says
+    # what it provides. Without it a search result for a Trainer is a name.
+    rules: list[str] = Field(default_factory=list)
     weaknesses: Weaknesses = Field(default_factory=list)
     resistances: Resistances = Field(default_factory=list)
     retreat_cost: list[str] = Field(default_factory=list, alias="retreatCost")
     rarity: str | None = None
+    legalities: dict[str, str] = Field(default_factory=dict)
     artist: str = ""
     images: Images = Field(default_factory=Images)
 
@@ -103,7 +109,56 @@ class BlockFormat(_Model):
 class CardFilters(_Model):
     hp: HPFilter | None = None
     types: Types = Field(default_factory=list)
+    supertype: str | None = None
+    name: str | None = None
     weakness: str | None = None
+    resistance: str | None = None
     attack_cost: AttackCost | None = None
     rarity: str | None = None
     block_format: str | None = None
+
+
+class SearchResults(_Model):
+    """The search_cards envelope.
+
+    'returned' is set explicitly at the one construction site rather than
+    computed, because a computed field would serialize after 'cards' and bury
+    the paging numbers under the payload they describe.
+    """
+
+    total_count: int
+    limit: int
+    offset: int
+    returned: int
+    cards: list[Card] = Field(default_factory=list)
+
+
+class _Input(BaseModel):
+    """Caller-authored input, which rejects unknown keys.
+
+    _Model is lenient because it maps *Mongo* documents, which carry fields the
+    models do not care about. These come from the caller instead, where a
+    dropped key ('qty' for 'count') would not widen a search — it would produce
+    a confidently wrong verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DeckEntry(_Input):
+    card_id: str = Field(min_length=1)
+    # Required on purpose: a missing count must fail loudly rather than
+    # default to 1 and quietly change the deck being validated.
+    count: int = Field(ge=1, le=60)
+
+
+class DeckList(_Input):
+    cards: list[DeckEntry] = Field(min_length=1)
+    block_format: str = Field(min_length=1)
+
+
+class DeckValidation(_Model):
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    total_cards: int = 0
