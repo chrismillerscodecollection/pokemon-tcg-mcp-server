@@ -8,6 +8,7 @@ dependencies = [
     "dotenv>=0.9.9",
     "fastmcp>=3.4.5",
     "motor>=3.7.1",
+    "pydantic>=2.13.4",
     "pymongo>=4.17.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
