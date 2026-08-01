@@ -3,6 +3,7 @@ import sys
 
 from dotenv import load_dotenv
 
+from pokemon_tcg_mcp_server import tools  # noqa: F401  (registers the tools)
 from pokemon_tcg_mcp_server.app import mcp
 
 load_dotenv()
