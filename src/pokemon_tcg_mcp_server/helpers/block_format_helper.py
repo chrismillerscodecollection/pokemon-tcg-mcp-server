@@ -16,12 +16,24 @@ from ..models import BlockFormat, PromoSet
 
 
 async def load_block_format(db, block_format: str) -> BlockFormat:
-    """Look up a format by id, then by name; raise if neither hits."""
+    """Look up a format by id or name; raise if neither hits.
+
+    One round trip rather than a find_one on '_id' followed by a find_one on
+    'name'. Every caller awaits this before it can build its card query, so the
+    trip it saves is on the critical path of both search_cards and
+    validate_deck.
+
+    The tradeoff: '$or' gives no precedence, where the sequential form let a
+    match on '_id' win. That only differs if one document's 'name' equals a
+    *different* document's '_id' — ids are slugs ('base-fossil') and names are
+    titles ('Base - Fossil'), so no such pair exists. If one is ever added,
+    this returns whichever document Mongo reaches first.
+    """
 
     formats = db["block_formats"]
-    doc = await formats.find_one({"_id": block_format})
-    if doc is None:
-        doc = await formats.find_one({"name": block_format})
+    doc = await formats.find_one(
+        {"$or": [{"_id": block_format}, {"name": block_format}]}
+    )
     if doc is None:
         raise ToolError(
             f"Unknown block format {block_format!r}. "

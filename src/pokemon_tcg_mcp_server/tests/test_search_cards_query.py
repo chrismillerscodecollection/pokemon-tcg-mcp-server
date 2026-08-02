@@ -79,17 +79,20 @@ class TestBuildBlockFormatStage:
 
         assert stage == {"_id": {"$regex": "^(baseset|jungle|fossil)-"}}
 
-    async def test_looked_up_by_id_first(self, db, block_formats):
+    async def test_id_and_name_are_looked_up_in_one_round_trip(self, db, block_formats):
+        # Every caller awaits this before it can build its card query, so the
+        # sequential id-then-name form put an extra trip on the critical path.
         await build_block_format_stage(db, "base-fossil")
 
-        assert block_formats.queries[0] == {"_id": "base-fossil"}
+        assert block_formats.queries == [
+            {"$or": [{"_id": "base-fossil"}, {"name": "base-fossil"}]}
+        ]
 
-    async def test_falls_back_to_name(self, db, block_formats):
+    async def test_resolves_by_name(self, db, block_formats):
         stage = await build_block_format_stage(db, "Base - Fossil")
 
         assert block_formats.queries == [
-            {"_id": "Base - Fossil"},
-            {"name": "Base - Fossil"},
+            {"$or": [{"_id": "Base - Fossil"}, {"name": "Base - Fossil"}]}
         ]
         assert stage == {"_id": {"$regex": "^(baseset|jungle|fossil)-"}}
 

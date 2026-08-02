@@ -6,15 +6,19 @@ documents; it deliberately does not implement Mongo's query language. Query
 `build_query` in test_search_cards_query.py, so the tool tests only need a
 collection that reports what it was asked for and hands back documents.
 
-Two deliberate exceptions to that rule:
+Three deliberate exceptions to that rule:
 
 * `sort`/`skip`/`limit` are honoured for real. They are list operations rather
   than query semantics, so the fake can implement them exactly — and paging is
   precisely the thing that would go unnoticed if it were faked loosely.
-* `find_one` understands dotted paths and `$regex`, which get_card_by_id's
-  did-you-mean fallback needs. Anything beyond those raises NotImplementedError
-  rather than quietly returning a wrong answer, which is what stops this from
-  growing into a bad MongoDB emulator.
+* `find_one` understands dotted paths, `$regex` and `$or`, which get_card_by_id's
+  did-you-mean fallback and load_block_format's one-trip lookup need. Anything
+  beyond those raises NotImplementedError rather than quietly returning a wrong
+  answer, which is what stops this from growing into a bad MongoDB emulator.
+* `find` filters on `{'_id': {'$in': [...]}}`, and only that shape. validate_deck
+  bounds its `to_list` by the number of ids it asked for; a cursor that returned
+  documents the query excluded would hit that bound and drop real answers, so
+  the fake has to be honest about this one form.
 
 Documents use the real id namespace: '<set>-<number>' with the set spelled the
 way block_formats spells it ('baseset'), which is *not* the code that appears
@@ -166,10 +170,32 @@ PROMO: dict[str, Any] = {
 # --- fakes ------------------------------------------------------------------
 
 
+def _in_filter(query: dict[str, Any]) -> list[str] | None:
+    """The id list from a `{'_id': {'$in': [...]}}` query, if that is the shape.
+
+    The one query form the cursor filters on. validate_deck bounds its to_list
+    by the number of ids it asked for, which is exact against real Mongo but
+    would truncate a non-filtering fake into dropping documents it should have
+    returned -- so the fake has to be faithful here or the bound is untestable.
+    """
+
+    criterion = query.get("_id")
+    if len(query) != 1 or not isinstance(criterion, dict):
+        return None
+    if set(criterion) != {"$in"}:
+        return None
+    return list(criterion["$in"])
+
+
 class FakeCursor:
     """Records the modifiers it was chained with, and applies them for real."""
 
-    def __init__(self, docs: Iterable[dict[str, Any]]) -> None:
+    def __init__(
+        self, docs: Iterable[dict[str, Any]], query: dict[str, Any] | None = None
+    ) -> None:
+        ids = _in_filter(query or {})
+        if ids is not None:
+            docs = [doc for doc in docs if doc.get("_id") in ids]
         self._docs = list(docs)
         self.applied: dict[str, Any] = {"sort": None, "skip": None, "limit": None}
 
@@ -231,8 +257,27 @@ def _matches(value: Any, criterion: Any) -> bool:
     return value == criterion
 
 
+def _matches_query(doc: dict[str, Any], query: dict[str, Any]) -> bool:
+    """Field predicates ANDed together, plus a top-level '$or'.
+
+    '$or' is a query operator rather than a field path, so it cannot go through
+    _resolve like the rest. load_block_format uses it to look a format up by id
+    or name in one round trip.
+    """
+
+    for key, value in query.items():
+        if key == "$or":
+            if not any(_matches_query(doc, branch) for branch in value):
+                return False
+        elif key.startswith("$"):
+            raise NotImplementedError(f"FakeCollection does not implement {key!r}")
+        elif not _matches(_resolve(doc, key), value):
+            return False
+    return True
+
+
 class FakeCollection:
-    """Stand-in for a motor collection that records every query it receives."""
+    """Stand-in for an async collection that records every query it receives."""
 
     def __init__(self, docs: Iterable[dict[str, Any]] = ()) -> None:
         self.docs = list(docs)
@@ -250,7 +295,7 @@ class FakeCollection:
 
     def find(self, query: dict[str, Any]) -> FakeCursor:
         self.queries.append(query)
-        cursor = FakeCursor(self.docs)
+        cursor = FakeCursor(self.docs, query)
         self.cursors.append(cursor)
         return cursor
 
@@ -266,23 +311,27 @@ class FakeCollection:
         return len(self.docs)
 
     async def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
-        """Equality, dotted paths and $regex — the forms the tools use."""
+        """Equality, dotted paths, $regex and $or — the forms the tools use."""
 
         self.queries.append(query)
         for doc in self.docs:
-            if all(_matches(_resolve(doc, key), value) for key, value in query.items()):
+            if _matches_query(doc, query):
                 return doc
         return None
 
 
 class FakeMongoClient(dict):
-    """Mapping of database name -> database, with motor's close()."""
+    """Mapping of database name -> database, with the driver's close().
+
+    close() is a coroutine: pymongo's AsyncMongoClient shuts down as an await,
+    where motor's client closed synchronously.
+    """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.closed = False
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self.closed = True
 
 
@@ -298,9 +347,9 @@ def cards() -> FakeCollection:
 def deck_cards(cards: FakeCollection) -> FakeCollection:
     """The `cards` collection widened with the documents deck tests need.
 
-    validate_deck asks for {'_id': {'$in': [...]}} and resolves the answer
-    client-side, so the fake's non-filtering find is already correct for it:
-    an id absent from these docs is reported unknown, as it should be.
+    validate_deck asks for {'_id': {'$in': [...]}}, which the fake cursor
+    filters on for real, so an id absent from these docs comes back missing and
+    is reported unknown, as it should be.
     """
 
     cards.docs = [
