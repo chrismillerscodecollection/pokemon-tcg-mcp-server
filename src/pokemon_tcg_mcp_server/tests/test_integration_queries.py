@@ -148,7 +148,7 @@ async def live_db():
         yield db
     finally:
         await client.drop_database(TEST_DB_NAME)
-        client.close()
+        await client.close()
 
 
 async def matching_ids(db, filters: CardFilters, collection: str = "cards") -> set[str]:

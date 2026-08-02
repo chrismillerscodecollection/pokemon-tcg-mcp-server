@@ -18,13 +18,28 @@ ID_HINT = (
 )
 
 
+# Every images.small value is served from this one host. Anchoring the
+# did-you-mean regex to it is what lets an index on 'images.small' answer the
+# query -- see image_url_pattern.
+IMAGE_HOST = "https://images.pokemontcg.io"
+
+
 def image_url_pattern(card_id: str) -> str | None:
     """A regex matching the images.small URL an image-namespace id implies.
 
-    'base1-91' becomes '/base1/91\\.png$', which is how a caller who guessed
-    the id from an image URL gets pointed at the real one. Split on the LAST
-    hyphen: set names may contain one, card numbers do not. The leading slash
-    and the anchor are what stop '/base1/9.png' matching '/base1/91.png'.
+    'base1-91' becomes '^https://images\\.pokemontcg\\.io/base1/91\\.png$',
+    which is how a caller who guessed the id from an image URL gets pointed at
+    the real one. Split on the LAST hyphen: set names may contain one, card
+    numbers do not. The trailing anchor is what stops '/base1/9.png' matching
+    '/base1/91.png'.
+
+    Anchored at BOTH ends on purpose. A pattern that only ends in '$' is a
+    collection scan, because Mongo can only serve a regex from an index when it
+    is a literal prefix match -- and the miss path this runs on is exactly what
+    a caller guessing ids generates in bulk. The cost is that a document served
+    from some other host stops resolving: the caller then gets the plain
+    'no card with that id' message, which still names the id scheme, rather
+    than a wrong answer.
 
     Returns None for an id with no usable '<prefix>-<number>' shape.
     """
@@ -33,7 +48,7 @@ def image_url_pattern(card_id: str) -> str | None:
     if not separator or not prefix or not number:
         return None
 
-    return re.escape(f"/{prefix}/{number}.png") + "$"
+    return "^" + re.escape(f"{IMAGE_HOST}/{prefix}/{number}.png") + "$"
 
 
 @mcp.tool

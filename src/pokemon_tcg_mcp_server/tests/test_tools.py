@@ -14,6 +14,7 @@ from bson import ObjectId
 from fastmcp.exceptions import ToolError
 
 from pokemon_tcg_mcp_server.tools.get_card_by_id import (
+    IMAGE_HOST,
     get_card_by_id,
     image_url_pattern,
 )
@@ -117,7 +118,9 @@ class TestSearchCards:
             "search_cards", {"filters": {"block_format": "base-fossil"}}
         )
 
-        assert block_formats.queries == [{"_id": "base-fossil"}]
+        assert block_formats.queries == [
+            {"$or": [{"_id": "base-fossil"}, {"name": "base-fossil"}]}
+        ]
         assert cards.last_query == {"_id": {"$regex": "^(baseset|jungle|fossil)-"}}
 
     async def test_unknown_block_format_is_reported_to_the_caller(self, mcp_client):
@@ -284,12 +287,12 @@ class TestImageUrlPattern:
     @pytest.mark.parametrize(
         ("card_id", "expected"),
         [
-            ("base1-91", re.escape("/base1/91.png") + "$"),
+            ("base1-91", "^" + re.escape(f"{IMAGE_HOST}/base1/91.png") + "$"),
             # Set names may contain hyphens; card numbers do not, so the split
             # has to be on the last one.
             (
                 "sm-black-star-promos-12",
-                re.escape("/sm-black-star-promos/12.png") + "$",
+                "^" + re.escape(f"{IMAGE_HOST}/sm-black-star-promos/12.png") + "$",
             ),
             ("charizard", None),  # nothing to split on
             ("-4", None),  # no prefix
@@ -304,6 +307,15 @@ class TestImageUrlPattern:
 
         assert re.search(pattern, "https://images.pokemontcg.io/base1/9.png")
         assert not re.search(pattern, "https://images.pokemontcg.io/base1/91.png")
+
+    def test_pattern_is_a_literal_prefix_match(self):
+        # The '^' is what lets an index on images.small serve this. Without it
+        # the did-you-mean fallback is a collection scan, on exactly the miss
+        # path a caller guessing ids hits repeatedly.
+        pattern = image_url_pattern("base1-91")
+
+        assert pattern.startswith("^" + re.escape("https://"))
+        assert not re.search(pattern, "https://example.test/base1/91.png")
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any
 
@@ -72,9 +73,19 @@ async def validate_deck(ctx: Context, deck: DeckList) -> str:
     if total != DECK_SIZE:
         errors.append(f"deck has {total} cards; exactly {DECK_SIZE} are required")
 
-    block_format = await load_block_format(db, deck.block_format)
-
-    docs = await db["cards"].find({"_id": {"$in": list(counts)}}).to_list(None)
+    # Issued together: the format lookup and the card fetch need nothing from
+    # each other, and running them in turn made every call pay both round trips
+    # end to end. An unknown format still raises out of the gather; the card
+    # query it races just goes to waste, which only happens on the error path.
+    #
+    # to_list is bounded by the id count rather than None: the query asks for
+    # exactly these ids, so this is the true size of the answer, and it keeps a
+    # future collection change from letting one request read unbounded memory.
+    card_ids = list(counts)
+    block_format, docs = await asyncio.gather(
+        load_block_format(db, deck.block_format),
+        db["cards"].find({"_id": {"$in": card_ids}}).to_list(len(card_ids)),
+    )
     by_id = {doc["_id"]: doc for doc in docs}
 
     by_name: dict[str, int] = {}

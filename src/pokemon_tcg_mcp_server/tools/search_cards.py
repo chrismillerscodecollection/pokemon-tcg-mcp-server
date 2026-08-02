@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import unicodedata
@@ -152,15 +153,18 @@ async def search_cards(
 
     query = await build_query(db, filters)
 
-    # Two round trips, so the count and the page are not one snapshot. This is
-    # read-only reference data, so nothing can change between them.
-    total_count = await cards.count_documents(query)
-
     # Sorted because an unsorted find has no ordering guarantee — this
     # collection demonstrably returns cards out of _id order — and paging over
     # an unstable order silently repeats some cards and drops others.
-    docs = (
-        await cards.find(query).sort("_id", 1).skip(offset).limit(limit).to_list(None)
+    cursor = cards.find(query).sort("_id", 1).skip(offset).limit(limit)
+
+    # Issued together: the count and the page are independent queries, and
+    # awaiting them in turn made every search pay two round trips end to end.
+    # They are still two round trips, so the pair is not one snapshot — this is
+    # read-only reference data, so nothing can change between them.
+    total_count, docs = await asyncio.gather(
+        cards.count_documents(query),
+        cursor.to_list(limit),
     )
 
     page = [Card.model_validate(doc) for doc in docs]
